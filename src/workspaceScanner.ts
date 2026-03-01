@@ -96,6 +96,10 @@ export class WorkspaceScanner {
   // KSファイルインデックス（ファイルパスをキーに）
   private ksFileIndices: Map<string, KsFileIndex> = new Map();
 
+  // KSファイルのコンテンツキャッシュ（relativePath をキーに）
+  // updateFile で受け取ったメモリ上の内容を保持し、ディスク未保存でも参照検索に使う
+  private ksFileContents: Map<string, string> = new Map();
+
   /**
    * ワークスペースルートを設定しdataディレクトリの存在を確認する
    */
@@ -269,6 +273,8 @@ export class WorkspaceScanner {
     }
 
     this.ksFileIndices.set(relativePath, { labels, macros });
+    // メモリ上のコンテンツを保持（参照検索でディスク未保存の編集内容を使うため）
+    this.ksFileContents.set(relativePath, content);
   }
 
   /**
@@ -424,11 +430,14 @@ export class WorkspaceScanner {
 
     for (const filePath of ksFiles) {
       try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n");
         const relativePath = path.relative(this.dataPath, filePath);
+        // メモリキャッシュ優先（未保存の編集内容を反映するため）
+        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
+        const lines = content.split("\n");
 
         for (let i = 0; i < lines.length; i++) {
+          // コメント行はスキップ（コメント内の参照を有効な参照として数えない）
+          if (lines[i].trimStart().startsWith(";")) continue;
           let match;
           regex.lastIndex = 0;
           while ((match = regex.exec(lines[i])) !== null) {
@@ -482,14 +491,16 @@ export class WorkspaceScanner {
 
     for (const filePath of ksFiles) {
       try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n");
         const relativePath = path.relative(this.dataPath, filePath);
+        // メモリキャッシュ優先（未保存の編集内容を反映するため）
+        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
+        const lines = content.split("\n");
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
 
-          // 定義行は除外
+          // コメント行・定義行は除外
+          if (line.trimStart().startsWith(";")) continue;
           if (defRegex.test(line)) continue;
 
           // [macroName パターン
