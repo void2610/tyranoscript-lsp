@@ -2,13 +2,13 @@
   "name": "@void2610/tyranoscript-lsp",
   "version": "0.6.3",
   "description": "TyranoScript Language Server for Zed",
-  "homepage": "https://github.com/void2610/tyranoscript-zed",
+  "homepage": "https://github.com/void2610/tyranoscript-lsp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/void2610/tyranoscript-zed.git"
+    "url": "https://github.com/void2610/tyranoscript-lsp.git"
   },
   "bugs": {
-    "url": "https://github.com/void2610/tyranoscript-zed/issues"
+    "url": "https://github.com/void2610/tyranoscript-lsp/issues"
   },
   "main": "dist/server.js",
   "files": [
