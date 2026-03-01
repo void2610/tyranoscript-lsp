@@ -56,4 +56,4 @@ npm run watch    # ファイル変更時に自動ビルド
 
 ## ライセンス
 
-[MIT](../LICENSE)
+[MIT](LICENSE)
