@@ -192,20 +192,89 @@ export class WorkspaceScanner {
    */
   private async scanKsFiles(): Promise<void> {
     const scenarioPath = path.join(this.dataPath, "scenario");
-    if (!fs.existsSync(scenarioPath)) return;
+    const pluginPath = path.join(this.dataPath, "others", "plugin");
 
-    const ksFiles = this.findKsFiles(scenarioPath);
     this.ksFileIndices.clear();
 
-    for (const filePath of ksFiles) {
-      try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const relativePath = path.relative(this.dataPath, filePath);
-        this.indexKsContent(relativePath, content);
-      } catch {
-        // 読み取りエラーは無視
+    // scenario/ の .ks をスキャン
+    if (fs.existsSync(scenarioPath)) {
+      for (const filePath of this.findKsFiles(scenarioPath)) {
+        try {
+          const content = fs.readFileSync(filePath, "utf-8");
+          this.indexKsContent(path.relative(this.dataPath, filePath), content);
+        } catch {
+          // 読み取りエラーは無視
+        }
       }
     }
+
+    // プラグインフォルダの .ks と .js をスキャン
+    if (fs.existsSync(pluginPath)) {
+      for (const filePath of this.findKsFiles(pluginPath)) {
+        try {
+          const content = fs.readFileSync(filePath, "utf-8");
+          this.indexKsContent(path.relative(this.dataPath, filePath), content);
+        } catch {
+          // 読み取りエラーは無視
+        }
+      }
+      for (const filePath of this.findFilesByExt(pluginPath, ".js")) {
+        try {
+          const content = fs.readFileSync(filePath, "utf-8");
+          this.indexPluginJs(path.relative(this.dataPath, filePath), content);
+        } catch {
+          // 読み取りエラーは無視
+        }
+      }
+    }
+  }
+
+  /**
+   * プラグイン .js から TYRANO.kag.ftag.master_tag.XXX パターンを検出してマクロとして登録する
+   */
+  private indexPluginJs(relativePath: string, content: string): void {
+    const pattern = /TYRANO\.kag\.ftag\.master_tag\.(\w+)\s*=/g;
+    const lines = content.split("\n");
+    const macros: MacroDefinition[] = [];
+    let match;
+    while ((match = pattern.exec(content)) !== null) {
+      const tagName = match[1];
+      const lineNum = content.slice(0, match.index).split("\n").length - 1;
+      // 直前の行にあるコメントを説明文として使う
+      const prevLine = lines[lineNum - 1]?.match(/^\s*\/\/\s?(.*)/);
+      macros.push({
+        name: tagName,
+        file: relativePath,
+        line: lineNum,
+        description: prevLine ? prevLine[1] : `プラグインタグ (${relativePath})`,
+      });
+    }
+    if (macros.length > 0) {
+      const existing = this.ksFileIndices.get(relativePath) ?? { labels: [], macros: [] };
+      existing.macros.push(...macros);
+      this.ksFileIndices.set(relativePath, existing);
+    }
+  }
+
+  /**
+   * 指定ディレクトリ配下の指定拡張子のファイルを再帰的に検索する
+   */
+  private findFilesByExt(dirPath: string, ext: string): string[] {
+    const results: string[] = [];
+    try {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          results.push(...this.findFilesByExt(fullPath, ext));
+        } else if (entry.name.endsWith(ext)) {
+          results.push(fullPath);
+        }
+      }
+    } catch {
+      // 読み取りエラーは無視
+    }
+    return results;
   }
 
   /**
