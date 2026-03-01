@@ -1,0 +1,29 @@
+{
+  "name": "@void2610/tyranoscript-lsp",
+  "version": "0.6.2",
+  "description": "TyranoScript Language Server for Zed",
+  "homepage": "https://github.com/void2610/tyranoscript-zed",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/void2610/tyranoscript-zed.git"
+  },
+  "bugs": {
+    "url": "https://github.com/void2610/tyranoscript-zed/issues"
+  },
+  "main": "dist/server.js",
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "esbuild src/server.ts --bundle --platform=node --outfile=dist/server.js --format=cjs",
+    "watch": "esbuild src/server.ts --bundle --platform=node --outfile=dist/server.js --format=cjs --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.0.0"
+  }
+}
