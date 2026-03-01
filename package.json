@@ -1,6 +1,6 @@
 {
   "name": "@void2610/tyranoscript-lsp",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "TyranoScript Language Server for Zed",
   "homepage": "https://github.com/void2610/tyranoscript-zed",
   "repository": {
