@@ -1240,11 +1240,13 @@ documents.onDidChangeContent((change) => {
   if (existing) clearTimeout(existing);
 
   // 500ms後にインデックスを更新して診断を push する
+  // ファイル間参照（chara/label/macro の定義と参照が別ファイル）に対応するため、
+  // 変更ファイルのインデックス更新後に全 KS ファイルを再検証する
   updateTimers.set(
     uri,
     setTimeout(() => {
       scanner.updateFile(uri, change.document.getText());
-      validateAndPublish(uri, change.document);
+      validateAllKsFiles();
       updateTimers.delete(uri);
     }, 500)
   );
