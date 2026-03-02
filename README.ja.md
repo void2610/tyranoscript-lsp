@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[TyranoScript](https://tyrano.jp/)向けLanguage Serverです。[Zed](https://zed.dev/)拡張 [tyranoscript-zed](https://github.com/void2610/tyranoscript-zed) から利用されます。
+[TyranoScript](https://tyrano.jp/)向けLanguage Serverです。[VSCode](https://code.visualstudio.com/)拡張 [tyranoscript-vscode](https://github.com/void2610/tyranoscript-vscode) および [Zed](https://zed.dev/)拡張 [tyranoscript-zed](https://github.com/void2610/tyranoscript-zed) から利用されます。
 
 ## 機能
 
