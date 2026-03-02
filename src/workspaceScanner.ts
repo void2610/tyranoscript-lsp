@@ -18,6 +18,13 @@ export interface MacroDefinition {
   description: string;
 }
 
+/** プロジェクト内のキャラクター定義（[chara_new name="xxx"]） */
+export interface CharaDefinition {
+  name: string;
+  file: string;
+  line: number;
+}
+
 /** 参照検索結果 */
 export interface FileReference {
   file: string; // data/ からの相対パス
@@ -76,6 +83,7 @@ interface AssetCacheEntry {
 interface KsFileIndex {
   labels: LabelDefinition[];
   macros: MacroDefinition[];
+  charas: CharaDefinition[];
 }
 
 /** キャッシュTTL（ミリ秒） */
@@ -304,6 +312,7 @@ export class WorkspaceScanner {
   private indexKsContent(relativePath: string, content: string): void {
     const labels: LabelDefinition[] = [];
     const macros: MacroDefinition[] = [];
+    const charas: CharaDefinition[] = [];
     const lines = content.split("\n");
 
     for (let i = 0; i < lines.length; i++) {
@@ -339,9 +348,19 @@ export class WorkspaceScanner {
           description: commentLines.join("\n"),
         });
       }
+
+      // キャラクター定義検出: [chara_new ... name="xxx" ...]
+      const charaMatch = line.match(/\[chara_new\b[^\]]*\bname\s*=\s*"([^"]+)"/i);
+      if (charaMatch) {
+        charas.push({
+          name: charaMatch[1],
+          file: relativePath,
+          line: i,
+        });
+      }
     }
 
-    this.ksFileIndices.set(relativePath, { labels, macros });
+    this.ksFileIndices.set(relativePath, { labels, macros, charas });
     // メモリ上のコンテンツを保持（参照検索でディスク未保存の編集内容を使うため）
     this.ksFileContents.set(relativePath, content);
   }
@@ -447,6 +466,17 @@ export class WorkspaceScanner {
       labels.push(...index.labels);
     }
     return labels;
+  }
+
+  /**
+   * 全キャラクター定義を返す
+   */
+  getCharas(): CharaDefinition[] {
+    const charas: CharaDefinition[] = [];
+    for (const index of this.ksFileIndices.values()) {
+      charas.push(...index.charas);
+    }
+    return charas;
   }
 
   /**
@@ -594,6 +624,55 @@ export class WorkspaceScanner {
               line: i,
               startChar: start,
               endChar: start + macroName.length,
+            });
+          }
+        }
+      } catch {
+        // 読み取りエラーは無視
+      }
+    }
+    return results;
+  }
+
+  /**
+   * 全 .ks ファイルからキャラクター参照箇所を検索する
+   * chara_new 以外の chara_* タグで name="charaName" にマッチする行を返す
+   */
+  findCharaReferences(charaName: string): FileReference[] {
+    if (!this.initialized) return [];
+
+    const results: FileReference[] = [];
+    const scenarioPath = path.join(this.dataPath, "scenario");
+    if (!fs.existsSync(scenarioPath)) return results;
+
+    const ksFiles = this.findKsFiles(scenarioPath);
+    const escaped = this.escapeRegExp(charaName);
+    // chara_new 以外の chara_* タグ行にマッチするか判定
+    const charaTagRegex = /\[chara_(?!new\b)\w+/;
+    // name="charaName" または name=charaName にマッチしキャラ名をキャプチャ
+    const nameRegex = new RegExp(`\\bname\\s*=\\s*"?(${escaped})"?`, "g");
+
+    for (const filePath of ksFiles) {
+      try {
+        const relativePath = path.relative(this.dataPath, filePath);
+        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
+        const lines = content.split("\n");
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (line.trimStart().startsWith(";")) continue;
+          if (!charaTagRegex.test(line)) continue;
+
+          nameRegex.lastIndex = 0;
+          let match;
+          while ((match = nameRegex.exec(line)) !== null) {
+            // キャプチャグループ1がキャラ名の開始位置
+            const nameStart = match.index + match[0].length - match[1].length;
+            results.push({
+              file: relativePath,
+              line: i,
+              startChar: nameStart,
+              endChar: nameStart + charaName.length,
             });
           }
         }

@@ -27,6 +27,7 @@ import {
   TAG_STORAGE_MAPPING,
   AssetCategory,
   FileReference,
+  CharaDefinition,
 } from "./workspaceScanner";
 
 /**
@@ -368,7 +369,7 @@ connection.onCompletion(
 
 /** 定義ジャンプ・参照検索の対象種別 */
 interface DefinitionContext {
-  kind: "label" | "macro" | "file";
+  kind: "label" | "macro" | "file" | "chara";
   name: string;
 }
 
@@ -394,11 +395,17 @@ function getDefinitionContext(
         ? valueCtx.currentValue + afterCursor.substring(0, closingQuoteIdx)
         : valueCtx.currentValue;
 
-    if (valueCtx.paramName === "target" && fullValue.startsWith("*")) {
-      return { kind: "label", name: fullValue.substring(1) };
+    if (valueCtx.paramName === "target" && fullValue.length > 0) {
+      // target="*labelName" と target="labelName"（*なし）の両方に対応
+      const name = fullValue.startsWith("*") ? fullValue.substring(1) : fullValue;
+      return { kind: "label", name };
     }
     if (valueCtx.paramName === "storage" && fullValue.length > 0) {
       return { kind: "file", name: fullValue };
+    }
+    // chara_* タグの name 属性でキャラクター参照を検出
+    if (valueCtx.paramName === "name" && valueCtx.tagName.startsWith("chara_") && fullValue.length > 0) {
+      return { kind: "chara", name: fullValue };
     }
     return null;
   }
@@ -490,6 +497,18 @@ connection.onDefinition(
           ),
         };
       }
+      case "chara": {
+        // [chara_new name="xxx"] 定義へジャンプ
+        const chara = scanner.getCharas().find((c) => c.name === ctx.name);
+        if (!chara) return null;
+        return {
+          uri: scanner.resolveFilePath(chara.file),
+          range: Range.create(
+            Position.create(chara.line, 0),
+            Position.create(chara.line, 0)
+          ),
+        };
+      }
     }
   }
 );
@@ -513,6 +532,17 @@ function getLabelDefinitionAtCursor(
  */
 function getMacroDefinitionAtCursor(lineText: string): string | null {
   const match = lineText.match(/\[macro\s+name\s*=\s*"(\w+)"\s*\]/i);
+  if (match) {
+    return match[1];
+  }
+  return null;
+}
+
+/**
+ * カーソル位置がキャラクター定義行 ([chara_new ... name="xxx" ...]) にあるかを判定する
+ */
+function getCharaDefinitionAtCursor(lineText: string): string | null {
+  const match = lineText.match(/\[chara_new\b[^\]]*\bname\s*=\s*"([^"]+)"/i);
   if (match) {
     return match[1];
   }
@@ -549,7 +579,14 @@ connection.onReferences(
       return refs.map(refToLocation);
     }
 
-    // 3. ラベル参照 (target="*xxx") → 定義 + 他の参照箇所
+    // 3. キャラクター定義行 ([chara_new name="xxx"]) → 全参照箇所を返す
+    const charaDef = getCharaDefinitionAtCursor(lineText);
+    if (charaDef) {
+      const refs = scanner.findCharaReferences(charaDef);
+      return refs.map(refToLocation);
+    }
+
+    // 4. ラベル参照 (target="*xxx") → 定義 + 他の参照箇所
     const defCtx = getDefinitionContext(lineText, character);
     if (defCtx) {
       if (defCtx.kind === "label") {
@@ -585,6 +622,25 @@ connection.onReferences(
         }
         // 全使用箇所を追加
         const refs = scanner.findMacroReferences(defCtx.name);
+        results.push(...refs.map(refToLocation));
+        return results;
+      }
+
+      // 5. キャラクター参照 (chara_* name="xxx") → 定義 + 他の参照箇所
+      if (defCtx.kind === "chara") {
+        // 定義箇所を追加
+        const chara = scanner.getCharas().find((c) => c.name === defCtx.name);
+        if (chara) {
+          results.push({
+            uri: scanner.resolveFilePath(chara.file),
+            range: Range.create(
+              Position.create(chara.line, 0),
+              Position.create(chara.line, 0)
+            ),
+          });
+        }
+        // 全参照箇所を追加
+        const refs = scanner.findCharaReferences(defCtx.name);
         results.push(...refs.map(refToLocation));
         return results;
       }
