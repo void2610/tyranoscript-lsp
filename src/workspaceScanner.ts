@@ -25,6 +25,22 @@ export interface CharaDefinition {
   line: number;
 }
 
+/** プロジェクト内のキャラクター表情定義（[chara_face name="xxx" face="yyy"]） */
+export interface FaceDefinition {
+  charaName: string;
+  faceName: string;
+  file: string;
+  line: number;
+}
+
+/** プロジェクト内の名前付き要素定義（[ptext name="xxx"] / [image name="xxx"]） */
+export interface NamedElementDefinition {
+  elementName: string;
+  tagName: "ptext" | "image";
+  file: string;
+  line: number;
+}
+
 /** 参照検索結果 */
 export interface FileReference {
   file: string; // data/ からの相対パス
@@ -84,6 +100,8 @@ interface KsFileIndex {
   labels: LabelDefinition[];
   macros: MacroDefinition[];
   charas: CharaDefinition[];
+  faces: FaceDefinition[];
+  namedElements: NamedElementDefinition[];
 }
 
 /** キャッシュTTL（ミリ秒） */
@@ -258,7 +276,7 @@ export class WorkspaceScanner {
       });
     }
     if (macros.length > 0) {
-      const existing = this.ksFileIndices.get(relativePath) ?? { labels: [], macros: [], charas: [] };
+      const existing = this.ksFileIndices.get(relativePath) ?? { labels: [], macros: [], charas: [], faces: [], namedElements: [] };
       existing.macros.push(...macros);
       this.ksFileIndices.set(relativePath, existing);
     }
@@ -313,6 +331,8 @@ export class WorkspaceScanner {
     const labels: LabelDefinition[] = [];
     const macros: MacroDefinition[] = [];
     const charas: CharaDefinition[] = [];
+    const faces: FaceDefinition[] = [];
+    const namedElements: NamedElementDefinition[] = [];
     const lines = content.split("\n");
 
     for (let i = 0; i < lines.length; i++) {
@@ -358,9 +378,30 @@ export class WorkspaceScanner {
           line: i,
         });
       }
+
+      // 表情定義検出: [chara_face ... name="X" ... face="Y" ...]（属性順序不問）
+      const charaFaceTagMatch = line.match(/\[chara_face\b([^\]]*)\]/i);
+      if (charaFaceTagMatch) {
+        const attrs = charaFaceTagMatch[1];
+        const nameM = attrs.match(/\bname\s*=\s*"([^"]+)"/i);
+        const faceM = attrs.match(/\bface\s*=\s*"([^"]+)"/i);
+        if (nameM && faceM) {
+          faces.push({ charaName: nameM[1], faceName: faceM[1], file: relativePath, line: i });
+        }
+      }
+
+      // 名前付き要素定義検出: [ptext name="xxx"] / [image name="xxx"]
+      const ptextNameMatch = line.match(/\[ptext\b[^\]]*\bname\s*=\s*"([^"]+)"/i);
+      if (ptextNameMatch) {
+        namedElements.push({ elementName: ptextNameMatch[1], tagName: "ptext", file: relativePath, line: i });
+      }
+      const imageNameMatch = line.match(/\[image\b[^\]]*\bname\s*=\s*"([^"]+)"/i);
+      if (imageNameMatch) {
+        namedElements.push({ elementName: imageNameMatch[1], tagName: "image", file: relativePath, line: i });
+      }
     }
 
-    this.ksFileIndices.set(relativePath, { labels, macros, charas });
+    this.ksFileIndices.set(relativePath, { labels, macros, charas, faces, namedElements });
     // メモリ上のコンテンツを保持（参照検索でディスク未保存の編集内容を使うため）
     this.ksFileContents.set(relativePath, content);
   }
@@ -477,6 +518,28 @@ export class WorkspaceScanner {
       if (index.charas) charas.push(...index.charas);
     }
     return charas;
+  }
+
+  /**
+   * 全キャラクター表情定義を返す
+   */
+  getFaces(): FaceDefinition[] {
+    const faces: FaceDefinition[] = [];
+    for (const index of this.ksFileIndices.values()) {
+      if (index.faces) faces.push(...index.faces);
+    }
+    return faces;
+  }
+
+  /**
+   * 全名前付き要素定義（ptext / image）を返す
+   */
+  getNamedElements(): NamedElementDefinition[] {
+    const elements: NamedElementDefinition[] = [];
+    for (const index of this.ksFileIndices.values()) {
+      if (index.namedElements) elements.push(...index.namedElements);
+    }
+    return elements;
   }
 
   /**
@@ -674,6 +737,109 @@ export class WorkspaceScanner {
               startChar: nameStart,
               endChar: nameStart + charaName.length,
             });
+          }
+        }
+      } catch {
+        // 読み取りエラーは無視
+      }
+    }
+    return results;
+  }
+
+  /**
+   * 全 .ks ファイルからキャラクター表情の参照箇所を検索する
+   * chara_face 以外の chara_* タグで name="charaName" かつ face="faceName" にマッチする行を返す
+   */
+  findFaceReferences(charaName: string, faceName: string): FileReference[] {
+    if (!this.initialized) return [];
+
+    const results: FileReference[] = [];
+    const scenarioPath = path.join(this.dataPath, "scenario");
+    if (!fs.existsSync(scenarioPath)) return results;
+
+    const ksFiles = this.findKsFiles(scenarioPath);
+    const escapedCharaName = this.escapeRegExp(charaName);
+    const escapedFaceName = this.escapeRegExp(faceName);
+    // chara_face 以外の chara_* タグ行かを確認
+    const charaTagRegex = /\[chara_(?!face\b)\w+/;
+    // 同一行に name="charaName" が存在するか確認
+    const nameCheckRegex = new RegExp(`\\bname\\s*=\\s*"${escapedCharaName}"`, "i");
+    // face="faceName" の値位置をキャプチャ
+    const faceValueRegex = new RegExp(`\\bface\\s*=\\s*"(${escapedFaceName})"`, "g");
+
+    for (const filePath of ksFiles) {
+      try {
+        const relativePath = path.relative(this.dataPath, filePath);
+        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
+        const lines = content.split("\n");
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (line.trimStart().startsWith(";")) continue;
+          if (!charaTagRegex.test(line)) continue;
+          if (!nameCheckRegex.test(line)) continue;
+
+          faceValueRegex.lastIndex = 0;
+          let match;
+          while ((match = faceValueRegex.exec(line)) !== null) {
+            const nameStart = match.index + match[0].length - match[1].length;
+            results.push({
+              file: relativePath,
+              line: i,
+              startChar: nameStart,
+              endChar: nameStart + faceName.length,
+            });
+          }
+        }
+      } catch {
+        // 読み取りエラーは無視
+      }
+    }
+    return results;
+  }
+
+  /**
+   * 全 .ks ファイルから名前付き要素（ptext/image）の参照箇所を検索する
+   * ptext="elementName" または use="elementName" にマッチする行を返す（定義行を除く）
+   */
+  findNamedElementReferences(elementName: string): FileReference[] {
+    if (!this.initialized) return [];
+
+    const results: FileReference[] = [];
+    const scenarioPath = path.join(this.dataPath, "scenario");
+    if (!fs.existsSync(scenarioPath)) return results;
+
+    const ksFiles = this.findKsFiles(scenarioPath);
+    const escaped = this.escapeRegExp(elementName);
+    // 定義行を除外: [ptext name="xxx"] または [image name="xxx"]
+    const defRegex = new RegExp(`\\[(?:ptext|image)\\b[^\\]]*\\bname\\s*=\\s*"${escaped}"`, "i");
+    // 参照パターン: ptext="xxx" または use="xxx"
+    const ptextRegex = new RegExp(`\\bptext\\s*=\\s*"(${escaped})"`, "g");
+    const useRegex   = new RegExp(`\\buse\\s*=\\s*"(${escaped})"`, "g");
+
+    for (const filePath of ksFiles) {
+      try {
+        const relativePath = path.relative(this.dataPath, filePath);
+        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
+        const lines = content.split("\n");
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (line.trimStart().startsWith(";")) continue;
+          if (defRegex.test(line)) continue; // 定義行はスキップ
+
+          for (const regex of [ptextRegex, useRegex]) {
+            regex.lastIndex = 0;
+            let match;
+            while ((match = regex.exec(line)) !== null) {
+              const nameStart = match.index + match[0].length - match[1].length;
+              results.push({
+                file: relativePath,
+                line: i,
+                startChar: nameStart,
+                endChar: nameStart + elementName.length,
+              });
+            }
           }
         }
       } catch {

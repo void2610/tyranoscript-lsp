@@ -19,7 +19,9 @@ Language Server for [TyranoScript](https://tyrano.jp/). Used by the [VS Code](ht
   - `storage="xxx.ks"` → jump to file
   - `[mymacro]` / `@mymacro` → jump to macro definition
   - `[chara_show name="xxx"]` → jump to `[chara_new name="xxx"]` definition
-- Find References — list all usages of labels, macros, and characters
+  - `face=` in `[chara_mod name="akane" face="smile"]` → jump to `[chara_face]` definition
+  - `ptext=` in `[chara_config]` / `use=` in `[glyph]` → jump to `[ptext]` / `[image]` definition
+- Find References — list all usages of labels, macros, characters, faces, and named elements
 - Diagnostics (checks the entire project, including unopened files)
   - Missing required parameters (error)
   - Missing file references (warning): `storage`, `graphic`, `enterimg`, `leaveimg`, `clickimg`

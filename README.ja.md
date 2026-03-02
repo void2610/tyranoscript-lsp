@@ -19,10 +19,14 @@
   - `storage="xxx.ks"` → 対象ファイル先頭へジャンプ
   - `[mymacro]` / `@mymacro` → マクロ定義行へジャンプ
   - `[chara_show name="xxx"]` → `[chara_new name="xxx"]` 定義行へジャンプ
+  - `[chara_mod name="akane" face="smile"]` の `face=` → `[chara_face]` 定義行へジャンプ
+  - `[chara_config ptext="namebox"]` / `[glyph use="namebox"]` → `[ptext name="namebox"]` 定義行へジャンプ
 - 参照検索（Find References）
   - ラベル定義行 / 参照箇所から全使用箇所を一覧表示
   - マクロ定義行 / 使用箇所から全使用箇所を一覧表示
   - キャラクター定義行 / 参照箇所から全使用箇所を一覧表示
+  - 表情定義行（`[chara_face]`）/ 参照箇所から全使用箇所を一覧表示
+  - 名前付き要素定義行（`[ptext]` / `[image]`）/ 参照箇所から全使用箇所を一覧表示
 - 診断（Diagnostics）— 開いていないファイルも含めプロジェクト全体を検査
   - 必須パラメータ欠落（エラー）
   - 存在しないファイル参照（警告）: `storage` / `graphic` / `enterimg` / `leaveimg` / `clickimg`

@@ -28,6 +28,8 @@ import {
   AssetCategory,
   FileReference,
   CharaDefinition,
+  FaceDefinition,
+  NamedElementDefinition,
 } from "./workspaceScanner";
 
 /**
@@ -369,8 +371,10 @@ connection.onCompletion(
 
 /** 定義ジャンプ・参照検索の対象種別 */
 interface DefinitionContext {
-  kind: "label" | "macro" | "file" | "chara";
+  kind: "label" | "macro" | "file" | "chara" | "face" | "namedElement";
   name: string;
+  /** kind === "face" のときのキャラクター名 */
+  charaName?: string;
 }
 
 /**
@@ -406,6 +410,22 @@ function getDefinitionContext(
     // chara_* タグの name 属性でキャラクター参照を検出
     if (valueCtx.paramName === "name" && valueCtx.tagName.startsWith("chara_") && fullValue.length > 0) {
       return { kind: "chara", name: fullValue };
+    }
+    // chara_face 以外の chara_* タグの face 属性で表情参照を検出
+    if (valueCtx.paramName === "face" && valueCtx.tagName.startsWith("chara_") && valueCtx.tagName !== "chara_face" && fullValue.length > 0) {
+      // 同一行の name= からキャラクター名を取得
+      const nameMatch = lineText.match(/\bname\s*=\s*"([^"]+)"/);
+      if (nameMatch) {
+        return { kind: "face", name: fullValue, charaName: nameMatch[1] };
+      }
+    }
+    // ptext="xxx" → 名前付き要素（ptext/image）参照
+    if (valueCtx.paramName === "ptext" && fullValue.length > 0) {
+      return { kind: "namedElement", name: fullValue };
+    }
+    // use="xxx" → 名前付き要素（ptext/image）参照（[glyph] 等）
+    if (valueCtx.paramName === "use" && fullValue.length > 0) {
+      return { kind: "namedElement", name: fullValue };
     }
     return null;
   }
@@ -509,6 +529,32 @@ connection.onDefinition(
           ),
         };
       }
+      case "face": {
+        // [chara_face name="xxx" face="yyy"] 定義へジャンプ
+        const face = scanner.getFaces().find(
+          (f) => f.charaName === ctx.charaName && f.faceName === ctx.name
+        );
+        if (!face) return null;
+        return {
+          uri: scanner.resolveFilePath(face.file),
+          range: Range.create(
+            Position.create(face.line, 0),
+            Position.create(face.line, 0)
+          ),
+        };
+      }
+      case "namedElement": {
+        // [ptext name="xxx"] または [image name="xxx"] 定義へジャンプ
+        const elem = scanner.getNamedElements().find((e) => e.elementName === ctx.name);
+        if (!elem) return null;
+        return {
+          uri: scanner.resolveFilePath(elem.file),
+          range: Range.create(
+            Position.create(elem.line, 0),
+            Position.create(elem.line, 0)
+          ),
+        };
+      }
     }
   }
 );
@@ -549,6 +595,27 @@ function getCharaDefinitionAtCursor(lineText: string): string | null {
   return null;
 }
 
+/**
+ * カーソル位置が表情定義行 ([chara_face ... name="X" ... face="Y" ...]) にあるかを判定する
+ */
+function getFaceDefinitionAtCursor(lineText: string): { charaName: string; faceName: string } | null {
+  const tagMatch = lineText.match(/\[chara_face\b([^\]]*)\]/i);
+  if (!tagMatch) return null;
+  const attrs = tagMatch[1];
+  const nameM = attrs.match(/\bname\s*=\s*"([^"]+)"/i);
+  const faceM = attrs.match(/\bface\s*=\s*"([^"]+)"/i);
+  if (nameM && faceM) return { charaName: nameM[1], faceName: faceM[1] };
+  return null;
+}
+
+/**
+ * カーソル位置が名前付き要素定義行 ([ptext name="xxx"] / [image name="xxx"]) にあるかを判定する
+ */
+function getNamedElementDefinitionAtCursor(lineText: string): string | null {
+  const match = lineText.match(/\[(?:ptext|image)\b[^\]]*\bname\s*=\s*"([^"]+)"/i);
+  return match ? match[1] : null;
+}
+
 // 参照検索ハンドラ
 connection.onReferences(
   (params: ReferenceParams): Location[] => {
@@ -583,6 +650,20 @@ connection.onReferences(
     const charaDef = getCharaDefinitionAtCursor(lineText);
     if (charaDef) {
       const refs = scanner.findCharaReferences(charaDef);
+      return refs.map(refToLocation);
+    }
+
+    // 3b. 表情定義行 ([chara_face name="X" face="Y"]) → 全参照箇所を返す
+    const faceDef = getFaceDefinitionAtCursor(lineText);
+    if (faceDef) {
+      const refs = scanner.findFaceReferences(faceDef.charaName, faceDef.faceName);
+      return refs.map(refToLocation);
+    }
+
+    // 3c. 名前付き要素定義行 ([ptext name="xxx"] / [image name="xxx"]) → 全参照箇所を返す
+    const namedElemDef = getNamedElementDefinitionAtCursor(lineText);
+    if (namedElemDef) {
+      const refs = scanner.findNamedElementReferences(namedElemDef);
       return refs.map(refToLocation);
     }
 
@@ -641,6 +722,42 @@ connection.onReferences(
         }
         // 全参照箇所を追加
         const refs = scanner.findCharaReferences(defCtx.name);
+        results.push(...refs.map(refToLocation));
+        return results;
+      }
+
+      // 6. 表情参照 (chara_* face="xxx") → 定義 + 他の参照箇所
+      if (defCtx.kind === "face" && defCtx.charaName) {
+        const face = scanner.getFaces().find(
+          (f) => f.charaName === defCtx.charaName && f.faceName === defCtx.name
+        );
+        if (face) {
+          results.push({
+            uri: scanner.resolveFilePath(face.file),
+            range: Range.create(
+              Position.create(face.line, 0),
+              Position.create(face.line, 0)
+            ),
+          });
+        }
+        const refs = scanner.findFaceReferences(defCtx.charaName, defCtx.name);
+        results.push(...refs.map(refToLocation));
+        return results;
+      }
+
+      // 7. 名前付き要素参照 (ptext="xxx" / use="xxx") → 定義 + 他の参照箇所
+      if (defCtx.kind === "namedElement") {
+        const elem = scanner.getNamedElements().find((e) => e.elementName === defCtx.name);
+        if (elem) {
+          results.push({
+            uri: scanner.resolveFilePath(elem.file),
+            range: Range.create(
+              Position.create(elem.line, 0),
+              Position.create(elem.line, 0)
+            ),
+          });
+        }
+        const refs = scanner.findNamedElementReferences(defCtx.name);
         results.push(...refs.map(refToLocation));
         return results;
       }
