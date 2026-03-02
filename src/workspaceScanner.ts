@@ -258,7 +258,7 @@ export class WorkspaceScanner {
       });
     }
     if (macros.length > 0) {
-      const existing = this.ksFileIndices.get(relativePath) ?? { labels: [], macros: [] };
+      const existing = this.ksFileIndices.get(relativePath) ?? { labels: [], macros: [], charas: [] };
       existing.macros.push(...macros);
       this.ksFileIndices.set(relativePath, existing);
     }
@@ -474,7 +474,7 @@ export class WorkspaceScanner {
   getCharas(): CharaDefinition[] {
     const charas: CharaDefinition[] = [];
     for (const index of this.ksFileIndices.values()) {
-      charas.push(...index.charas);
+      if (index.charas) charas.push(...index.charas);
     }
     return charas;
   }
