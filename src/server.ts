@@ -945,15 +945,18 @@ function validateDocument(document: TextDocument): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   const lines = document.getText().split("\n");
 
-  // 定義済みラベル・マクロをセットにキャッシュ
+  // 定義済みラベル・マクロ・キャラをセットにキャッシュ
   const knownLabels = new Set(scanner.getLabels().map((l) => l.name));
   const knownMacros = new Set(scanner.getMacros().map((m) => m.name));
+  const knownCharas = new Set(scanner.getCharas().map((c) => c.name));
 
   let inMacroBlock = false;  // [macro]〜[endmacro] 内はスキップ
   let inScriptBlock = false; // [iscript]〜[endscript] 内はスキップ
 
   // 診断5用: このドキュメントで定義されたラベルを収集する
   const definedLabels: Array<{ name: string; line: number }> = [];
+  // 診断7用: このドキュメントで定義されたキャラクターを収集する
+  const definedCharas: Array<{ name: string; line: number }> = [];
 
   for (let i = 0; i < lines.length; i++) {
     // ラベル定義行（*labelName）を検出して収集
@@ -1078,6 +1081,33 @@ function validateDocument(document: TextDocument): Diagnostic[] {
         ));
       }
     }
+
+    // 診断6: 無効なキャラクター参照（chara_new 以外の chara_* タグの name 属性を検証）
+    if (tagName.startsWith("chara_") && tagName !== "chara_new") {
+      const nameValue = params.get("name");
+      if (
+        nameValue &&
+        !nameValue.startsWith("[") &&
+        !nameValue.startsWith("%") &&
+        !nameValue.startsWith("&")
+      ) {
+        if (!knownCharas.has(nameValue)) {
+          diagnostics.push(Diagnostic.create(
+            getParamValueRangeInLine(lines[i], i, "name", nameValue),
+            `未定義のキャラクター: "${nameValue}" は [chara_new] で定義されていません`,
+            DiagnosticSeverity.Warning,
+            "tyrano-undefined-chara",
+            "tyranoscript"
+          ));
+        }
+      }
+    }
+
+    // 診断7用: このドキュメントで定義された chara_new を収集する
+    if (tagName === "chara_new") {
+      const nameValue = params.get("name");
+      if (nameValue) definedCharas.push({ name: nameValue, line: i });
+    }
   }
 
   // 診断5: 未使用ラベル（全ファイルから参照されていないラベルを警告）
@@ -1094,6 +1124,20 @@ function validateDocument(document: TextDocument): Diagnostic[] {
         `ラベル "*${name}" はどこからも参照されていません`,
         DiagnosticSeverity.Warning,
         "tyrano-unused-label",
+        "tyranoscript"
+      ));
+    }
+  }
+
+  // 診断7: 未使用キャラクター（全ファイルからどこからも参照されない chara_new 定義を警告）
+  for (const { name, line } of definedCharas) {
+    const refs = scanner.findCharaReferences(name);
+    if (refs.length === 0) {
+      diagnostics.push(Diagnostic.create(
+        getParamValueRangeInLine(lines[line], line, "name", name),
+        `キャラクター "${name}" はどこからも参照されていません`,
+        DiagnosticSeverity.Warning,
+        "tyrano-unused-chara",
         "tyranoscript"
       ));
     }

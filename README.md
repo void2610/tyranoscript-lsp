@@ -10,7 +10,7 @@ Language Server for [TyranoScript](https://tyrano.jp/). Used by the [VS Code](ht
 - Parameter completion (already used parameters are excluded)
 - Snippet insertion for required parameters
 - Hover documentation for tags and parameters
-- Automatic workspace indexing for assets, labels, and macros
+- Automatic workspace indexing for assets, labels, macros, and characters
   - Asset file completion for `storage=""`
   - Label completion (`*xxx`) for `target=""`
   - User-defined macro completion and hover documentation
@@ -18,13 +18,16 @@ Language Server for [TyranoScript](https://tyrano.jp/). Used by the [VS Code](ht
   - `target="*xxx"` → jump to label definition
   - `storage="xxx.ks"` → jump to file
   - `[mymacro]` / `@mymacro` → jump to macro definition
-- Find References — list all usages of labels and macros
+  - `[chara_show name="xxx"]` → jump to `[chara_new name="xxx"]` definition
+- Find References — list all usages of labels, macros, and characters
 - Diagnostics (checks the entire project, including unopened files)
   - Missing required parameters (error)
   - Missing file references (warning): `storage`, `graphic`, `enterimg`, `leaveimg`, `clickimg`
   - Undefined tag/macro (warning)
   - Undefined label references (warning)
   - Unused labels (warning)
+  - Undefined character references (warning): `name` in `chara_show`/`chara_hide` etc. not defined by `chara_new`
+  - Unused characters (warning): `chara_new` defined but never referenced
   - Skips JS code inside `[iscript]...[endscript]`
   - Resolves relative paths containing `../`
   - Skips variable expansion prefixes (`&`, `%`, `[`)
