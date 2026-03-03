@@ -2,6 +2,9 @@
 import * as fs from "fs";
 import * as path from "path";
 
+const TF_DEFINITION_PATTERN =
+  "(?:\\+\\+|--)\\s*tf\\.([A-Za-z_]\\w*)\\b|\\btf\\.([A-Za-z_]\\w*)\\b\\s*(?:[+\\-*/%]?=(?!=)|\\+\\+|--)";
+
 /** プロジェクト内のラベル定義 */
 export interface LabelDefinition {
   name: string; // ラベル名（*の後の部分）
@@ -924,8 +927,7 @@ export class WorkspaceScanner {
   ): TfDefinition[] {
     const definitions: TfDefinition[] = [];
     const seen = new Set<string>();
-    const regex =
-      /(?:\+\+|--)\s*tf\.([A-Za-z_]\w*)\b|\btf\.([A-Za-z_]\w*)\b\s*(?:[+\-*/%]?=|\+\+|--)/g;
+    const regex = new RegExp(TF_DEFINITION_PATTERN, "g");
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -948,9 +950,27 @@ export class WorkspaceScanner {
    * インデックス済みファイルの一覧を返す
    */
   private getSearchableFiles(extensions?: string[]): string[] {
-    const files = [...this.ksFileContents.keys()];
-    if (!extensions || extensions.length === 0) return files;
-    return files.filter((file) => extensions.some((ext) => file.endsWith(ext)));
+    const files = new Set<string>(this.ksFileContents.keys());
+    const scenarioPath = path.join(this.dataPath, "scenario");
+    if (fs.existsSync(scenarioPath)) {
+      for (const filePath of this.findKsFiles(scenarioPath)) {
+        files.add(path.relative(this.dataPath, filePath));
+      }
+    }
+
+    const pluginPath = path.join(this.dataPath, "others", "plugin");
+    if (fs.existsSync(pluginPath)) {
+      for (const filePath of this.findKsFiles(pluginPath)) {
+        files.add(path.relative(this.dataPath, filePath));
+      }
+      for (const filePath of this.findFilesByExt(pluginPath, ".js")) {
+        files.add(path.relative(this.dataPath, filePath));
+      }
+    }
+
+    const fileList = [...files];
+    if (!extensions || extensions.length === 0) return fileList;
+    return fileList.filter((file) => extensions.some((ext) => file.endsWith(ext)));
   }
 
   /**

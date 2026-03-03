@@ -33,6 +33,9 @@ import {
   TfDefinition,
 } from "./workspaceScanner";
 
+const TF_DEFINITION_PATTERN =
+  "(?:\\+\\+|--)\\s*tf\\.([A-Za-z_]\\w*)\\b|\\btf\\.([A-Za-z_]\\w*)\\b\\s*(?:[+\\-*/%]?=(?!=)|\\+\\+|--)";
+
 /**
  * storage 以外のファイル参照パラメータ → アセットカテゴリ のマッピング
  * タグ横断で同じカテゴリに属するパラメータを一括チェックする
@@ -691,7 +694,7 @@ function getTfDefinitionAtCursor(
   if (!tfName) return null;
 
   const tfDefRegex =
-    /(?:\+\+|--)\s*tf\.([A-Za-z_]\w*)\b|\btf\.([A-Za-z_]\w*)\b\s*(?:[+\-*/%]?=|\+\+|--)/g;
+    new RegExp(TF_DEFINITION_PATTERN, "g");
   let match;
   while ((match = tfDefRegex.exec(lineText)) !== null) {
     const name = match[1] ?? match[2];
