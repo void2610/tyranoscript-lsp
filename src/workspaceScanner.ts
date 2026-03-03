@@ -41,6 +41,13 @@ export interface NamedElementDefinition {
   line: number;
 }
 
+/** プロジェクト内の tf 変数定義 */
+export interface TfDefinition {
+  name: string;
+  file: string;
+  line: number;
+}
+
 /** 参照検索結果 */
 export interface FileReference {
   file: string; // data/ からの相対パス
@@ -102,6 +109,7 @@ interface KsFileIndex {
   charas: CharaDefinition[];
   faces: FaceDefinition[];
   namedElements: NamedElementDefinition[];
+  tfDefinitions: TfDefinition[];
 }
 
 /** キャッシュTTL（ミリ秒） */
@@ -262,6 +270,7 @@ export class WorkspaceScanner {
     const pattern = /TYRANO\.kag\.ftag\.master_tag\.(\w+)\s*=/g;
     const lines = content.split("\n");
     const macros: MacroDefinition[] = [];
+    const tfDefinitions = this.collectTfDefinitions(relativePath, lines, "js");
     let match;
     while ((match = pattern.exec(content)) !== null) {
       const tagName = match[1];
@@ -275,11 +284,20 @@ export class WorkspaceScanner {
         description: prevLine ? prevLine[1] : `プラグインタグ (${relativePath})`,
       });
     }
+    const existing = this.ksFileIndices.get(relativePath) ?? {
+      labels: [],
+      macros: [],
+      charas: [],
+      faces: [],
+      namedElements: [],
+      tfDefinitions: [],
+    };
     if (macros.length > 0) {
-      const existing = this.ksFileIndices.get(relativePath) ?? { labels: [], macros: [], charas: [], faces: [], namedElements: [] };
       existing.macros.push(...macros);
-      this.ksFileIndices.set(relativePath, existing);
     }
+    existing.tfDefinitions = tfDefinitions;
+    this.ksFileIndices.set(relativePath, existing);
+    this.ksFileContents.set(relativePath, content);
   }
 
   /**
@@ -334,6 +352,7 @@ export class WorkspaceScanner {
     const faces: FaceDefinition[] = [];
     const namedElements: NamedElementDefinition[] = [];
     const lines = content.split("\n");
+    const tfDefinitions = this.collectTfDefinitions(relativePath, lines, "ks");
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -401,7 +420,14 @@ export class WorkspaceScanner {
       }
     }
 
-    this.ksFileIndices.set(relativePath, { labels, macros, charas, faces, namedElements });
+    this.ksFileIndices.set(relativePath, {
+      labels,
+      macros,
+      charas,
+      faces,
+      namedElements,
+      tfDefinitions,
+    });
     // メモリ上のコンテンツを保持（参照検索でディスク未保存の編集内容を使うため）
     this.ksFileContents.set(relativePath, content);
   }
@@ -419,9 +445,20 @@ export class WorkspaceScanner {
       // dataディレクトリからの相対パスを算出
       const relativePath = path.relative(this.dataPath, filePath);
 
-      // data/scenario/ 配下の .ks ファイルのみ対象
+      // data/scenario/ 配下の .ks と plugin 配下の .ks/.js を対象
       if (relativePath.startsWith("scenario") && filePath.endsWith(".ks")) {
         this.indexKsContent(relativePath, content);
+        return;
+      }
+
+      if (relativePath.startsWith(path.join("others", "plugin"))) {
+        if (filePath.endsWith(".ks")) {
+          this.indexKsContent(relativePath, content);
+          return;
+        }
+        if (filePath.endsWith(".js")) {
+          this.indexPluginJs(relativePath, content);
+        }
       }
     } catch {
       // URIパースエラーは無視
@@ -438,7 +475,7 @@ export class WorkspaceScanner {
       const url = new URL(fileUri);
       const filePath = decodeURIComponent(url.pathname);
       const content = fs.readFileSync(filePath, "utf-8");
-      return content.split("\n").some((line) => {
+      return content.split("\n").some((line: string) => {
         if (line.trimStart().startsWith(";")) return false;
         return /target\s*=\s*[&%]/.test(line);
       });
@@ -543,6 +580,17 @@ export class WorkspaceScanner {
   }
 
   /**
+   * 全 tf 変数定義を返す
+   */
+  getTfDefinitions(): TfDefinition[] {
+    const definitions: TfDefinition[] = [];
+    for (const index of this.ksFileIndices.values()) {
+      if (index.tfDefinitions) definitions.push(...index.tfDefinitions);
+    }
+    return definitions;
+  }
+
+  /**
    * 全マクロ定義を返す
    */
   getMacros(): MacroDefinition[] {
@@ -568,56 +616,57 @@ export class WorkspaceScanner {
   }
 
   /**
-   * 全 .ks ファイルからラベル参照箇所を検索する
-   * 以下の記法をすべてカバーする:
-   *   target="*labelName"  ← クォートあり・アスタリスクあり
-   *   target=*labelName    ← クォートなし・アスタリスクあり
-   *   target="labelName"   ← クォートあり・アスタリスクなし
-   *   target=labelName     ← クォートなし・アスタリスクなし
+   * 全インデックス済みファイルからラベル参照箇所を検索する
+   * target= と nextOrderWithLabel() の両方をカバーする
    */
   findLabelReferences(labelName: string): FileReference[] {
     if (!this.initialized) return [];
 
     const results: FileReference[] = [];
-    const scenarioPath = path.join(this.dataPath, "scenario");
-    if (!fs.existsSync(scenarioPath)) return results;
-
-    const ksFiles = this.findKsFiles(scenarioPath);
     const escaped = this.escapeRegExp(labelName);
-    // target= の後、クォート有無・アスタリスク有無を問わずラベル名にマッチ
-    const regex = new RegExp(
+    const targetRegex = new RegExp(
       `target\\s*=\\s*["']?\\*?(${escaped})(?=["'\\s\\]\\r\\n]|$)`,
       "g"
     );
+    const jsLabelRegex = new RegExp(
+      `nextOrderWithLabel\\s*\\(\\s*["'](\\*?${escaped})["']`,
+      "g"
+    );
 
-    for (const filePath of ksFiles) {
-      try {
-        const relativePath = path.relative(this.dataPath, filePath);
-        // メモリキャッシュ優先（未保存の編集内容を反映するため）
-        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n");
+    for (const relativePath of this.getSearchableFiles()) {
+      const content = this.getIndexedFileContent(relativePath);
+      if (content === null) continue;
+      const lines = content.split("\n");
 
-        for (let i = 0; i < lines.length; i++) {
-          // コメント行はスキップ（コメント内の参照を有効な参照として数えない）
-          if (lines[i].trimStart().startsWith(";")) continue;
-          let match;
-          regex.lastIndex = 0;
-          while ((match = regex.exec(lines[i])) !== null) {
-            // キャプチャグループ1がラベル名の開始位置
-            const nameStart = match.index + match[0].length - match[1].length;
-            // *が直前にあればアスタリスクも含めた範囲を返す
-            const hasStar = lines[i][nameStart - 1] === "*";
-            const startChar = hasStar ? nameStart - 1 : nameStart;
-            results.push({
-              file: relativePath,
-              line: i,
-              startChar,
-              endChar: startChar + labelName.length + (hasStar ? 1 : 0),
-            });
-          }
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (this.isCommentLine(relativePath, line)) continue;
+
+        let match;
+        targetRegex.lastIndex = 0;
+        while ((match = targetRegex.exec(line)) !== null) {
+          const nameStart = match.index + match[0].length - match[1].length;
+          const hasStar = line[nameStart - 1] === "*";
+          const startChar = hasStar ? nameStart - 1 : nameStart;
+          results.push({
+            file: relativePath,
+            line: i,
+            startChar,
+            endChar: startChar + labelName.length + (hasStar ? 1 : 0),
+          });
         }
-      } catch {
-        // 読み取りエラーは無視
+
+        jsLabelRegex.lastIndex = 0;
+        while ((match = jsLabelRegex.exec(line)) !== null) {
+          const rawLabel = match[1];
+          const startChar = match.index + match[0].length - rawLabel.length;
+          results.push({
+            file: relativePath,
+            line: i,
+            startChar,
+            endChar: startChar + rawLabel.length,
+          });
+        }
       }
     }
     return results;
@@ -631,10 +680,6 @@ export class WorkspaceScanner {
     if (!this.initialized) return [];
 
     const results: FileReference[] = [];
-    const scenarioPath = path.join(this.dataPath, "scenario");
-    if (!fs.existsSync(scenarioPath)) return results;
-
-    const ksFiles = this.findKsFiles(scenarioPath);
     // [macroName で始まるパターン（タグ呼び出し）
     const bracketRegex = new RegExp(
       `\\[${this.escapeRegExp(macroName)}(?=[\\s\\]]|$)`,
@@ -651,47 +696,42 @@ export class WorkspaceScanner {
       "i"
     );
 
-    for (const filePath of ksFiles) {
-      try {
-        const relativePath = path.relative(this.dataPath, filePath);
-        // メモリキャッシュ優先（未保存の編集内容を反映するため）
-        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n");
+    for (const relativePath of this.getSearchableFiles([".ks"])) {
+      const content = this.getIndexedFileContent(relativePath);
+      if (content === null) continue;
+      const lines = content.split("\n");
 
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
 
-          // コメント行・定義行は除外
-          if (line.trimStart().startsWith(";")) continue;
-          if (defRegex.test(line)) continue;
+        // コメント行・定義行は除外
+        if (this.isCommentLine(relativePath, line)) continue;
+        if (defRegex.test(line)) continue;
 
-          // [macroName パターン
-          bracketRegex.lastIndex = 0;
-          let match;
-          while ((match = bracketRegex.exec(line)) !== null) {
-            const start = match.index + 1; // "[" の次
-            results.push({
-              file: relativePath,
-              line: i,
-              startChar: start,
-              endChar: start + macroName.length,
-            });
-          }
-
-          // @macroName パターン
-          atRegex.lastIndex = 0;
-          while ((match = atRegex.exec(line)) !== null) {
-            const start = match.index + 1; // "@" の次
-            results.push({
-              file: relativePath,
-              line: i,
-              startChar: start,
-              endChar: start + macroName.length,
-            });
-          }
+        // [macroName パターン
+        bracketRegex.lastIndex = 0;
+        let match;
+        while ((match = bracketRegex.exec(line)) !== null) {
+          const start = match.index + 1; // "[" の次
+          results.push({
+            file: relativePath,
+            line: i,
+            startChar: start,
+            endChar: start + macroName.length,
+          });
         }
-      } catch {
-        // 読み取りエラーは無視
+
+        // @macroName パターン
+        atRegex.lastIndex = 0;
+        while ((match = atRegex.exec(line)) !== null) {
+          const start = match.index + 1; // "@" の次
+          results.push({
+            file: relativePath,
+            line: i,
+            startChar: start,
+            endChar: start + macroName.length,
+          });
+        }
       }
     }
     return results;
@@ -705,42 +745,33 @@ export class WorkspaceScanner {
     if (!this.initialized) return [];
 
     const results: FileReference[] = [];
-    const scenarioPath = path.join(this.dataPath, "scenario");
-    if (!fs.existsSync(scenarioPath)) return results;
-
-    const ksFiles = this.findKsFiles(scenarioPath);
     const escaped = this.escapeRegExp(charaName);
     // chara_new 以外の chara_* タグ行にマッチするか判定
     const charaTagRegex = /\[chara_(?!new\b)\w+/;
     // name="charaName" または name=charaName にマッチしキャラ名をキャプチャ
     const nameRegex = new RegExp(`\\bname\\s*=\\s*"?(${escaped})"?`, "g");
 
-    for (const filePath of ksFiles) {
-      try {
-        const relativePath = path.relative(this.dataPath, filePath);
-        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n");
+    for (const relativePath of this.getSearchableFiles([".ks"])) {
+      const content = this.getIndexedFileContent(relativePath);
+      if (content === null) continue;
+      const lines = content.split("\n");
 
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          if (line.trimStart().startsWith(";")) continue;
-          if (!charaTagRegex.test(line)) continue;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (this.isCommentLine(relativePath, line)) continue;
+        if (!charaTagRegex.test(line)) continue;
 
-          nameRegex.lastIndex = 0;
-          let match;
-          while ((match = nameRegex.exec(line)) !== null) {
-            // キャプチャグループ1がキャラ名の開始位置
-            const nameStart = match.index + match[0].length - match[1].length;
-            results.push({
-              file: relativePath,
-              line: i,
-              startChar: nameStart,
-              endChar: nameStart + charaName.length,
-            });
-          }
+        nameRegex.lastIndex = 0;
+        let match;
+        while ((match = nameRegex.exec(line)) !== null) {
+          const nameStart = match.index + match[0].length - match[1].length;
+          results.push({
+            file: relativePath,
+            line: i,
+            startChar: nameStart,
+            endChar: nameStart + charaName.length,
+          });
         }
-      } catch {
-        // 読み取りエラーは無視
       }
     }
     return results;
@@ -754,10 +785,6 @@ export class WorkspaceScanner {
     if (!this.initialized) return [];
 
     const results: FileReference[] = [];
-    const scenarioPath = path.join(this.dataPath, "scenario");
-    if (!fs.existsSync(scenarioPath)) return results;
-
-    const ksFiles = this.findKsFiles(scenarioPath);
     const escapedCharaName = this.escapeRegExp(charaName);
     const escapedFaceName = this.escapeRegExp(faceName);
     // chara_face 以外の chara_* タグ行かを確認
@@ -767,32 +794,28 @@ export class WorkspaceScanner {
     // face="faceName" の値位置をキャプチャ
     const faceValueRegex = new RegExp(`\\bface\\s*=\\s*"(${escapedFaceName})"`, "g");
 
-    for (const filePath of ksFiles) {
-      try {
-        const relativePath = path.relative(this.dataPath, filePath);
-        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n");
+    for (const relativePath of this.getSearchableFiles([".ks"])) {
+      const content = this.getIndexedFileContent(relativePath);
+      if (content === null) continue;
+      const lines = content.split("\n");
 
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          if (line.trimStart().startsWith(";")) continue;
-          if (!charaTagRegex.test(line)) continue;
-          if (!nameCheckRegex.test(line)) continue;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (this.isCommentLine(relativePath, line)) continue;
+        if (!charaTagRegex.test(line)) continue;
+        if (!nameCheckRegex.test(line)) continue;
 
-          faceValueRegex.lastIndex = 0;
-          let match;
-          while ((match = faceValueRegex.exec(line)) !== null) {
-            const nameStart = match.index + match[0].length - match[1].length;
-            results.push({
-              file: relativePath,
-              line: i,
-              startChar: nameStart,
-              endChar: nameStart + faceName.length,
-            });
-          }
+        faceValueRegex.lastIndex = 0;
+        let match;
+        while ((match = faceValueRegex.exec(line)) !== null) {
+          const nameStart = match.index + match[0].length - match[1].length;
+          results.push({
+            file: relativePath,
+            line: i,
+            startChar: nameStart,
+            endChar: nameStart + faceName.length,
+          });
         }
-      } catch {
-        // 読み取りエラーは無視
       }
     }
     return results;
@@ -806,10 +829,6 @@ export class WorkspaceScanner {
     if (!this.initialized) return [];
 
     const results: FileReference[] = [];
-    const scenarioPath = path.join(this.dataPath, "scenario");
-    if (!fs.existsSync(scenarioPath)) return results;
-
-    const ksFiles = this.findKsFiles(scenarioPath);
     const escaped = this.escapeRegExp(elementName);
     // 定義行を除外: [ptext name="xxx"] または [image name="xxx"]
     const defRegex = new RegExp(`\\[(?:ptext|image)\\b[^\\]]*\\bname\\s*=\\s*"${escaped}"`, "i");
@@ -817,35 +836,66 @@ export class WorkspaceScanner {
     const ptextRegex = new RegExp(`\\bptext\\s*=\\s*"(${escaped})"`, "g");
     const useRegex   = new RegExp(`\\buse\\s*=\\s*"(${escaped})"`, "g");
 
-    for (const filePath of ksFiles) {
-      try {
-        const relativePath = path.relative(this.dataPath, filePath);
-        const content = this.ksFileContents.get(relativePath) ?? fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n");
+    for (const relativePath of this.getSearchableFiles([".ks"])) {
+      const content = this.getIndexedFileContent(relativePath);
+      if (content === null) continue;
+      const lines = content.split("\n");
 
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          if (line.trimStart().startsWith(";")) continue;
-          if (defRegex.test(line)) continue; // 定義行はスキップ
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (this.isCommentLine(relativePath, line)) continue;
+        if (defRegex.test(line)) continue; // 定義行はスキップ
 
-          for (const regex of [ptextRegex, useRegex]) {
-            regex.lastIndex = 0;
-            let match;
-            while ((match = regex.exec(line)) !== null) {
-              const nameStart = match.index + match[0].length - match[1].length;
-              results.push({
-                file: relativePath,
-                line: i,
-                startChar: nameStart,
-                endChar: nameStart + elementName.length,
-              });
-            }
+        for (const regex of [ptextRegex, useRegex]) {
+          regex.lastIndex = 0;
+          let match;
+          while ((match = regex.exec(line)) !== null) {
+            const nameStart = match.index + match[0].length - match[1].length;
+            results.push({
+              file: relativePath,
+              line: i,
+              startChar: nameStart,
+              endChar: nameStart + elementName.length,
+            });
           }
         }
-      } catch {
-        // 読み取りエラーは無視
       }
     }
+    return results;
+  }
+
+  /**
+   * 全インデックス済みファイルから tf 変数の参照箇所を検索する
+   */
+  findTfReferences(tfName: string): FileReference[] {
+    if (!this.initialized) return [];
+
+    const results: FileReference[] = [];
+    const regex = new RegExp(`\\btf\\.(${this.escapeRegExp(tfName)})\\b`, "g");
+
+    for (const relativePath of this.getSearchableFiles()) {
+      const content = this.getIndexedFileContent(relativePath);
+      if (content === null) continue;
+      const lines = content.split("\n");
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (this.isCommentLine(relativePath, line)) continue;
+
+        let match;
+        regex.lastIndex = 0;
+        while ((match = regex.exec(line)) !== null) {
+          const startChar = match.index;
+          results.push({
+            file: relativePath,
+            line: i,
+            startChar,
+            endChar: startChar + 3 + tfName.length,
+          });
+        }
+      }
+    }
+
     return results;
   }
 
@@ -862,5 +912,70 @@ export class WorkspaceScanner {
    */
   private escapeRegExp(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /**
+   * tf 変数の代入行を定義として抽出する
+   */
+  private collectTfDefinitions(
+    relativePath: string,
+    lines: string[],
+    fileType: "ks" | "js"
+  ): TfDefinition[] {
+    const definitions: TfDefinition[] = [];
+    const seen = new Set<string>();
+    const regex =
+      /(?:\+\+|--)\s*tf\.([A-Za-z_]\w*)\b|\btf\.([A-Za-z_]\w*)\b\s*(?:[+\-*/%]?=|\+\+|--)/g;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (this.isCommentLineByType(fileType, line)) continue;
+
+      let match;
+      regex.lastIndex = 0;
+      while ((match = regex.exec(line)) !== null) {
+        const name = match[1] ?? match[2];
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        definitions.push({ name, file: relativePath, line: i });
+      }
+    }
+
+    return definitions;
+  }
+
+  /**
+   * インデックス済みファイルの一覧を返す
+   */
+  private getSearchableFiles(extensions?: string[]): string[] {
+    const files = [...this.ksFileContents.keys()];
+    if (!extensions || extensions.length === 0) return files;
+    return files.filter((file) => extensions.some((ext) => file.endsWith(ext)));
+  }
+
+  /**
+   * インデックス済みファイルの内容を返す
+   */
+  private getIndexedFileContent(relativePath: string): string | null {
+    const cached = this.ksFileContents.get(relativePath);
+    if (cached !== undefined) return cached;
+
+    try {
+      return fs.readFileSync(path.join(this.dataPath, relativePath), "utf-8");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ファイル種別に応じたコメント行かを判定する
+   */
+  private isCommentLine(relativePath: string, line: string): boolean {
+    return this.isCommentLineByType(relativePath.endsWith(".js") ? "js" : "ks", line);
+  }
+
+  private isCommentLineByType(fileType: "ks" | "js", line: string): boolean {
+    const trimmed = line.trimStart();
+    return fileType === "js" ? trimmed.startsWith("//") : trimmed.startsWith(";");
   }
 }

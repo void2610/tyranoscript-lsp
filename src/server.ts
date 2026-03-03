@@ -30,6 +30,7 @@ import {
   CharaDefinition,
   FaceDefinition,
   NamedElementDefinition,
+  TfDefinition,
 } from "./workspaceScanner";
 
 /**
@@ -371,10 +372,52 @@ connection.onCompletion(
 
 /** 定義ジャンプ・参照検索の対象種別 */
 interface DefinitionContext {
-  kind: "label" | "macro" | "file" | "chara" | "face" | "namedElement";
+  kind: "label" | "macro" | "file" | "chara" | "face" | "namedElement" | "tf";
   name: string;
   /** kind === "face" のときのキャラクター名 */
   charaName?: string;
+}
+
+function findLabelReferenceAtCursor(
+  lineText: string,
+  character: number
+): string | null {
+  const targetRegex = /\btarget\s*=\s*["']?(\*?\w+)["']?/g;
+  let match;
+  while ((match = targetRegex.exec(lineText)) !== null) {
+    const start = match.index + match[0].length - match[1].length;
+    const end = start + match[1].length;
+    if (character >= start && character <= end) {
+      return match[1].startsWith("*") ? match[1].slice(1) : match[1];
+    }
+  }
+
+  const jsLabelRegex = /nextOrderWithLabel\s*\(\s*["'](\*?\w+)["']/g;
+  while ((match = jsLabelRegex.exec(lineText)) !== null) {
+    const start = match.index + match[0].length - match[1].length;
+    const end = start + match[1].length;
+    if (character >= start && character <= end) {
+      return match[1].startsWith("*") ? match[1].slice(1) : match[1];
+    }
+  }
+
+  return null;
+}
+
+function findTfReferenceAtCursor(
+  lineText: string,
+  character: number
+): string | null {
+  const tfRegex = /\btf\.([A-Za-z_]\w*)\b/g;
+  let match;
+  while ((match = tfRegex.exec(lineText)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (character >= start && character <= end) {
+      return match[1];
+    }
+  }
+  return null;
 }
 
 /**
@@ -387,6 +430,16 @@ function getDefinitionContext(
   lineText: string,
   character: number
 ): DefinitionContext | null {
+  const labelRef = findLabelReferenceAtCursor(lineText, character);
+  if (labelRef) {
+    return { kind: "label", name: labelRef };
+  }
+
+  const tfRef = findTfReferenceAtCursor(lineText, character);
+  if (tfRef) {
+    return { kind: "tf", name: tfRef };
+  }
+
   // 1. パラメータ値内の判定（target / storage）
   const valueCtx = getParamValueContext(lineText, character);
   if (valueCtx) {
@@ -555,6 +608,17 @@ connection.onDefinition(
           ),
         };
       }
+      case "tf": {
+        const tfDef = scanner.getTfDefinitions().find((def) => def.name === ctx.name);
+        if (!tfDef) return null;
+        return {
+          uri: scanner.resolveFilePath(tfDef.file),
+          range: Range.create(
+            Position.create(tfDef.line, 0),
+            Position.create(tfDef.line, 0)
+          ),
+        };
+      }
     }
   }
 );
@@ -616,6 +680,29 @@ function getNamedElementDefinitionAtCursor(lineText: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * カーソル位置が tf 変数の代入箇所にあるかを判定する
+ */
+function getTfDefinitionAtCursor(
+  lineText: string,
+  character: number
+): string | null {
+  const tfName = findTfReferenceAtCursor(lineText, character);
+  if (!tfName) return null;
+
+  const tfDefRegex =
+    /(?:\+\+|--)\s*tf\.([A-Za-z_]\w*)\b|\btf\.([A-Za-z_]\w*)\b\s*(?:[+\-*/%]?=|\+\+|--)/g;
+  let match;
+  while ((match = tfDefRegex.exec(lineText)) !== null) {
+    const name = match[1] ?? match[2];
+    if (name === tfName) {
+      return name;
+    }
+  }
+
+  return null;
+}
+
 // 参照検索ハンドラ
 connection.onReferences(
   (params: ReferenceParams): Location[] => {
@@ -664,6 +751,13 @@ connection.onReferences(
     const namedElemDef = getNamedElementDefinitionAtCursor(lineText);
     if (namedElemDef) {
       const refs = scanner.findNamedElementReferences(namedElemDef);
+      return refs.map(refToLocation);
+    }
+
+    // 3d. tf 変数定義行 → 全参照箇所を返す
+    const tfDef = getTfDefinitionAtCursor(lineText, character);
+    if (tfDef) {
+      const refs = scanner.findTfReferences(tfDef);
       return refs.map(refToLocation);
     }
 
@@ -758,6 +852,23 @@ connection.onReferences(
           });
         }
         const refs = scanner.findNamedElementReferences(defCtx.name);
+        results.push(...refs.map(refToLocation));
+        return results;
+      }
+
+      // 8. tf 変数参照 → 定義 + 他の参照箇所
+      if (defCtx.kind === "tf") {
+        const tfDef = scanner.getTfDefinitions().find((def) => def.name === defCtx.name);
+        if (tfDef) {
+          results.push({
+            uri: scanner.resolveFilePath(tfDef.file),
+            range: Range.create(
+              Position.create(tfDef.line, 0),
+              Position.create(tfDef.line, 0)
+            ),
+          });
+        }
+        const refs = scanner.findTfReferences(defCtx.name);
         results.push(...refs.map(refToLocation));
         return results;
       }
