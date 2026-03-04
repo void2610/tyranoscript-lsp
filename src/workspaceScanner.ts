@@ -10,6 +10,7 @@ export interface LabelDefinition {
   name: string; // ラベル名（*の後の部分）
   file: string; // 定義元ファイルの相対パス
   line: number;
+  description: string;
 }
 
 /** プロジェクト内のマクロ定義 */
@@ -363,31 +364,24 @@ export class WorkspaceScanner {
       // ラベル検出: 行頭の *xxx
       const labelMatch = line.match(/^\*(\w+)/);
       if (labelMatch) {
+        const commentLines = this.collectLeadingKsCommentLines(lines, i);
         labels.push({
           name: labelMatch[1],
           file: relativePath,
           line: i,
+          description: this.formatLabelCommentBlock(labelMatch[1], commentLines),
         });
       }
 
       // マクロ検出: [macro name="xxx"]
       const macroMatch = line.match(/\[macro\s+name\s*=\s*"(\w+)"\s*\]/i);
       if (macroMatch) {
-        // 直前の連続するコメント行を説明文として収集
-        const commentLines: string[] = [];
-        for (let j = i - 1; j >= 0; j--) {
-          const commentMatch = lines[j].match(/^;\s?(.*)/);
-          if (commentMatch) {
-            commentLines.unshift(commentMatch[1]);
-          } else {
-            break;
-          }
-        }
+        const commentLines = this.collectLeadingKsCommentLines(lines, i);
         macros.push({
           name: macroMatch[1],
           file: relativePath,
           line: i,
-          description: commentLines.join("\n"),
+          description: this.formatMacroCommentBlock(macroMatch[1], commentLines),
         });
       }
 
@@ -944,6 +938,99 @@ export class WorkspaceScanner {
     }
 
     return definitions;
+  }
+
+  /**
+   * 指定行の直前にある連続コメント行を収集する
+   */
+  private collectLeadingKsCommentLines(lines: string[], lineIndex: number): string[] {
+    const commentLines: string[] = [];
+    for (let j = lineIndex - 1; j >= 0; j--) {
+      const commentMatch = lines[j].match(/^;\s?(.*)$/);
+      if (!commentMatch) break;
+      commentLines.unshift(commentMatch[1]);
+    }
+    return commentLines;
+  }
+
+  /**
+   * マクロ定義コメントを Markdown として整形する
+   */
+  private formatMacroCommentBlock(macroName: string, commentLines: string[]): string {
+    const trimmed = commentLines
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !/^[-=]{3,}$/.test(line));
+
+    if (trimmed.length === 0) return "";
+    return this.formatStructuredCommentBlock(trimmed, `${macroName} マクロ`);
+  }
+
+  private formatLabelCommentBlock(labelName: string, commentLines: string[]): string {
+    const trimmed = commentLines
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    if (trimmed.length === 0) return "";
+    return this.formatStructuredCommentBlock(trimmed, `${labelName} ラベル`);
+  }
+
+  private formatStructuredCommentBlock(lines: string[], headingLine: string): string {
+    const sections: string[] = [];
+    const bodyLines: string[] = [];
+    const fieldBodies = new Map<string, string[]>();
+    const fieldOrder: string[] = [];
+    let activeFieldName: string | null = null;
+
+    for (const line of lines) {
+      if (line === headingLine) continue;
+
+      const fieldMatch = line.match(/^([^:：]+)\s*[:：]\s*(.+)$/);
+      if (fieldMatch) {
+        const fieldName = this.normalizeMacroFieldName(fieldMatch[1].trim());
+        const fieldValue = fieldMatch[2].trim();
+        if (!fieldBodies.has(fieldName)) {
+          fieldBodies.set(fieldName, []);
+          fieldOrder.push(fieldName);
+        }
+        fieldBodies.get(fieldName)!.push(fieldValue);
+        activeFieldName = fieldName;
+        continue;
+      }
+
+      if (activeFieldName) {
+        fieldBodies.get(activeFieldName)!.push(line);
+      } else {
+        bodyLines.push(line);
+      }
+    }
+
+    if (bodyLines.length > 0) {
+      if (fieldOrder.length === 1) {
+        fieldBodies.get(fieldOrder[0])!.push(...bodyLines);
+      } else {
+        sections.push(bodyLines.join("\n"));
+      }
+    }
+
+    for (const fieldName of fieldOrder) {
+      const values = fieldBodies.get(fieldName);
+      if (!values || values.length === 0) continue;
+      sections.push(`**${fieldName}**: ${values.join("\n")}`);
+    }
+
+    return sections.join("\n\n");
+  }
+
+  private normalizeMacroFieldName(name: string): string {
+    switch (name) {
+      case "引数":
+        return "Parameters";
+      case "処理":
+      case "責務":
+        return "Description";
+      default:
+        return name;
+    }
   }
 
   /**

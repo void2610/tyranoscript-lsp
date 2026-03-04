@@ -15,6 +15,7 @@ Language Server for [TyranoScript](https://tyrano.jp/). Used by the [VS Code](ht
   - Asset file completion for `storage=""`
   - Label completion (`*xxx`) for `target=""`
   - User-defined macro completion and hover documentation
+  - Hover descriptions from comments immediately above label definitions
 - Go to Definition
   - `target="*xxx"` → jump to label definition
   - `nextOrderWithLabel("*xxx", "file.ks")` → jump to label definition
@@ -25,6 +26,26 @@ Language Server for [TyranoScript](https://tyrano.jp/). Used by the [VS Code](ht
   - `face=` in `[chara_mod name="akane" face="smile"]` → jump to `[chara_face]` definition
   - `ptext=` in `[chara_config]` / `use=` in `[glyph]` → jump to `[ptext]` / `[image]` definition
 - Find References — list all usages of labels, JS label calls, macros, `tf.xxx`, characters, faces, and named elements
+
+### Macro And Label Description Comments
+
+Comments immediately above macro and label definitions are shown in hover.
+
+Recommended format:
+
+```ks
+; load_keyword_data macro
+; Parameters: storage - path to the data file
+; Description: Calls the target file and injects tf.kw_list / kw_key / judge_table
+[macro name="load_keyword_data"]
+
+; show_report_ui label
+; Description: Renders keyword buttons from tf.kw_list and enters click wait
+; Returns after on_complete_click finishes
+*show_report_ui
+```
+
+Lines following `Description:` or `Parameters:` are treated as continuations of the same field.
 - Diagnostics (checks the entire project, including unopened files)
   - Missing required parameters (error)
   - Missing file references (warning): `storage`, `graphic`, `enterimg`, `leaveimg`, `clickimg`

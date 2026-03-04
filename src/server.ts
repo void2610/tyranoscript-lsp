@@ -325,7 +325,7 @@ function createTargetCompletions(): CompletionItem[] {
     detail: label.file,
     documentation: {
       kind: MarkupKind.Markdown,
-      value: `ラベル **\*${label.name}**\n\n定義元: \`${label.file}\` (行 ${label.line + 1})`,
+      value: `**Label** \`*${label.name}\`\n\n${label.description ? `${label.description}\n\n` : ""}Defined in: \`${label.file}\` (line ${label.line + 1})`,
     },
     sortText: String(index).padStart(4, "0"),
   }));
@@ -895,6 +895,9 @@ connection.onHover(
 
     const character = params.position.character;
 
+    const labelHover = getLabelHover(lineText, character);
+    if (labelHover) return labelHover;
+
     // カーソル位置の単語を取得
     const wordRange = getWordRangeAtPosition(lineText, character);
     if (!wordRange) return null;
@@ -959,6 +962,16 @@ function getTagHover(
           },
         };
       }
+
+      const macro = scanner.getMacros().find((item) => item.name === match[1]);
+      if (macro) {
+        return {
+          contents: {
+            kind: MarkupKind.Markdown,
+            value: `**[${macro.name}]** — ユーザー定義マクロ\n\n${macro.description ? `${macro.description}\n\n` : ""}定義元: \`${macro.file}\` (行 ${macro.line + 1})`,
+          },
+        };
+      }
     }
   }
 
@@ -975,6 +988,16 @@ function getTagHover(
           contents: {
             kind: MarkupKind.Markdown,
             value: createTagDocumentation(tag),
+          },
+        };
+      }
+
+      const macro = scanner.getMacros().find((item) => item.name === atMatch[1]);
+      if (macro) {
+        return {
+          contents: {
+            kind: MarkupKind.Markdown,
+            value: `**[${macro.name}]** — ユーザー定義マクロ\n\n${macro.description ? `${macro.description}\n\n` : ""}定義元: \`${macro.file}\` (行 ${macro.line + 1})`,
           },
         };
       }
@@ -997,7 +1020,40 @@ function getTagHover(
     }
   }
 
+  const macro = scanner.getMacros().find((item) => item.name === word);
+  if (macro) {
+    const beforeWord = lineText.substring(0, character);
+    if (!/=\s*"?[^"]*$/.test(beforeWord)) {
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: `**[${macro.name}]** — ユーザー定義マクロ\n\n${macro.description ? `${macro.description}\n\n` : ""}定義元: \`${macro.file}\` (行 ${macro.line + 1})`,
+        },
+      };
+    }
+  }
+
   return null;
+}
+
+function getLabelHover(
+  lineText: string,
+  character: number
+): Hover | null {
+  const labelName =
+    findLabelReferenceAtCursor(lineText, character) ??
+    getLabelDefinitionAtCursor(lineText, character);
+  if (!labelName) return null;
+
+  const label = scanner.getLabels().find((item) => item.name === labelName);
+  if (!label) return null;
+
+  return {
+    contents: {
+      kind: MarkupKind.Markdown,
+      value: `**Label** \`*${label.name}\`\n\n${label.description ? `${label.description}\n\n` : ""}Defined in: \`${label.file}\` (line ${label.line + 1})`,
+    },
+  };
 }
 
 /**

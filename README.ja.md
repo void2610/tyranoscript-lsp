@@ -15,6 +15,7 @@
   - `storage=""` にアセットファイル名を補完
   - `target=""` にラベル名（`*xxx`）を補完
   - ユーザー定義マクロの補完・ホバードキュメント
+  - ラベル定義直前コメントのホバー表示
 - 定義へジャンプ（Go to Definition）
   - `target="*xxx"` → ラベル定義行へジャンプ
   - `nextOrderWithLabel("*xxx", "file.ks")` → ラベル定義行へジャンプ
@@ -32,6 +33,26 @@
   - キャラクター定義行 / 参照箇所から全使用箇所を一覧表示
   - 表情定義行（`[chara_face]`）/ 参照箇所から全使用箇所を一覧表示
   - 名前付き要素定義行（`[ptext]` / `[image]`）/ 参照箇所から全使用箇所を一覧表示
+
+### マクロ・ラベルの説明コメント
+
+マクロ定義やラベル定義の直前コメントは、ホバー説明として表示されます。
+
+推奨フォーマット:
+
+```ks
+; load_keyword_data マクロ
+; Parameters: storage - データファイルのパス
+; Description: 指定ファイルを call して tf.kw_list / kw_key / judge_table を注入する
+[macro name="load_keyword_data"]
+
+; show_report_ui ラベル
+; Description: tf.kw_list を元にキーワードボタンを描画し、クリック待ちに入る
+; 完成ボタン押下後に on_complete_click を経て return する
+*show_report_ui
+```
+
+`Description:` や `Parameters:` の後続コメント行は、その項目の継続行として扱われます。
 - 診断（Diagnostics）— 開いていないファイルも含めプロジェクト全体を検査
   - 必須パラメータ欠落（エラー）
   - 存在しないファイル参照（警告）: `storage` / `graphic` / `enterimg` / `leaveimg` / `clickimg`
