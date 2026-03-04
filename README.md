@@ -34,18 +34,16 @@ Comments immediately above macro and label definitions are shown in hover.
 Recommended format:
 
 ```ks
-; load_keyword_data macro
-; Parameters: storage - path to the data file
-; Description: Calls the target file and injects tf.kw_list / kw_key / judge_table
+; Calls the target file and injects tf.kw_list / kw_key / judge_table
+; Params: storage - path to the data file
 [macro name="load_keyword_data"]
 
-; show_report_ui label
-; Description: Renders keyword buttons from tf.kw_list and enters click wait
+; Renders keyword buttons from tf.kw_list and enters click wait
 ; Returns after on_complete_click finishes
 *show_report_ui
 ```
 
-Lines following `Description:` or `Parameters:` are treated as continuations of the same field.
+Descriptions can be plain comment lines without a field label. `Params:` lines and description lines are treated separately.
 - Diagnostics (checks the entire project, including unopened files)
   - Missing required parameters (error)
   - Missing file references (warning): `storage`, `graphic`, `enterimg`, `leaveimg`, `clickimg`

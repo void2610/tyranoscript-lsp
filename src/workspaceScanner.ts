@@ -979,7 +979,6 @@ export class WorkspaceScanner {
     const bodyLines: string[] = [];
     const fieldBodies = new Map<string, string[]>();
     const fieldOrder: string[] = [];
-    let activeFieldName: string | null = null;
 
     for (const line of lines) {
       if (line === headingLine) continue;
@@ -993,23 +992,14 @@ export class WorkspaceScanner {
           fieldOrder.push(fieldName);
         }
         fieldBodies.get(fieldName)!.push(fieldValue);
-        activeFieldName = fieldName;
         continue;
       }
 
-      if (activeFieldName) {
-        fieldBodies.get(activeFieldName)!.push(line);
-      } else {
-        bodyLines.push(line);
-      }
+      bodyLines.push(line);
     }
 
     if (bodyLines.length > 0) {
-      if (fieldOrder.length === 1) {
-        fieldBodies.get(fieldOrder[0])!.push(...bodyLines);
-      } else {
-        sections.push(bodyLines.join("\n"));
-      }
+      sections.push(bodyLines.join("\n"));
     }
 
     for (const fieldName of fieldOrder) {
@@ -1023,8 +1013,9 @@ export class WorkspaceScanner {
 
   private normalizeMacroFieldName(name: string): string {
     switch (name) {
+      case "Parameters":
       case "引数":
-        return "Parameters";
+        return "Params";
       case "処理":
       case "責務":
         return "Description";

@@ -41,18 +41,16 @@
 推奨フォーマット:
 
 ```ks
-; load_keyword_data マクロ
-; Parameters: storage - データファイルのパス
-; Description: 指定ファイルを call して tf.kw_list / kw_key / judge_table を注入する
+; 指定ファイルを call して tf.kw_list / kw_key / judge_table を注入する
+; Params: storage - データファイルのパス
 [macro name="load_keyword_data"]
 
-; show_report_ui ラベル
-; Description: tf.kw_list を元にキーワードボタンを描画し、クリック待ちに入る
+; tf.kw_list を元にキーワードボタンを描画し、クリック待ちに入る
 ; 完成ボタン押下後に on_complete_click を経て return する
 *show_report_ui
 ```
 
-`Description:` や `Parameters:` の後続コメント行は、その項目の継続行として扱われます。
+説明はラベルなしの素コメントで書けます。`Params:` と説明コメントは別行として扱われます。
 - 診断（Diagnostics）— 開いていないファイルも含めプロジェクト全体を検査
   - 必須パラメータ欠落（エラー）
   - 存在しないファイル参照（警告）: `storage` / `graphic` / `enterimg` / `leaveimg` / `clickimg`
