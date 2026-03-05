@@ -26,6 +26,7 @@ Language Server for [TyranoScript](https://tyrano.jp/). Used by the [VS Code](ht
   - `face=` in `[chara_mod name="akane" face="smile"]` → jump to `[chara_face]` definition
   - `ptext=` in `[chara_config]` / `use=` in `[glyph]` → jump to `[ptext]` / `[image]` definition
 - Find References — list all usages of labels, JS label calls, macros, `tf.xxx`, characters, faces, and named elements
+  - For `*start`, file jumps such as `[jump storage="xxx.ks"]` / `@jump storage="xxx.ks"` (without `target`) are treated as implicit references
 
 ### Macro And Label Description Comments
 
@@ -50,6 +51,7 @@ Descriptions can be plain comment lines without a field label. `Params:` lines a
   - Undefined tag/macro (warning)
   - Undefined label references (warning)
   - Unused labels (warning)
+    - `*start` is considered used only when there is an actual jump to that file (file jump or explicit `target="*start"` resolved to that file)
   - Undefined character references (warning): `name` in `chara_show`/`chara_hide` etc. not defined by `chara_new`
   - Unused characters (warning): `chara_new` defined but never referenced
   - Skips JS code inside `[iscript]...[endscript]`

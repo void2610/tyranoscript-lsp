@@ -725,7 +725,11 @@ connection.onReferences(
     // 1. ラベル定義行 (*xxx) → 全参照を返す
     const labelDef = getLabelDefinitionAtCursor(lineText, character);
     if (labelDef) {
-      const refs = scanner.findLabelReferences(labelDef);
+      const definitionFile = scanner.getRelativePathFromUri(document.uri) ?? undefined;
+      const refs = scanner.findLabelReferences(
+        labelDef,
+        definitionFile ? { definitionFile } : undefined
+      );
       return refs.map(refToLocation);
     }
 
@@ -1398,11 +1402,12 @@ function validateDocument(document: TextDocument): Diagnostic[] {
   }
 
   // 診断5: 未使用ラベル（全ファイルから参照されていないラベルを警告）
-  // エントリーポイントとして暗黙的に参照されるラベルはスキップ
-  const ENTRY_LABELS = new Set(["start"]);
+  const definitionFile = scanner.getRelativePathFromUri(document.uri) ?? undefined;
   for (const { name, line } of definedLabels) {
-    if (ENTRY_LABELS.has(name)) continue;
-    const refs = scanner.findLabelReferences(name);
+    const refs = scanner.findLabelReferences(
+      name,
+      definitionFile ? { definitionFile } : undefined
+    );
     // 静的参照が0件でも、同じファイルに動的参照（target=&var / target=%var）が
     // 1つでもあればそのラベルが動的にターゲットになりうるためスキップ
     if (refs.length === 0 && !scanner.hasDynamicTargetReference(document.uri)) {

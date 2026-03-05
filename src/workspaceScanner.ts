@@ -60,6 +60,13 @@ export interface FileReference {
   endChar: number;
 }
 
+interface ParsedTagParam {
+  name: string;
+  value: string;
+  valueStart: number;
+  valueEnd: number;
+}
+
 /** アセットカテゴリ */
 export type AssetCategory =
   | "bgimage"
@@ -482,6 +489,21 @@ export class WorkspaceScanner {
   }
 
   /**
+   * file:// URI を data/ からの相対パスに変換する
+   */
+  getRelativePathFromUri(fileUri: string): string | null {
+    try {
+      const url = new URL(fileUri);
+      const filePath = decodeURIComponent(url.pathname);
+      const relativePath = path.relative(this.dataPath, filePath);
+      if (relativePath.startsWith("..")) return null;
+      return relativePath.replace(/\\/g, "/");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * ワークスペース内の全 .ks ファイルを {uri, content} のリストで返す
    * スキャン未完了時は空配列を返す
    */
@@ -616,8 +638,15 @@ export class WorkspaceScanner {
    * 全インデックス済みファイルからラベル参照箇所を検索する
    * target= と nextOrderWithLabel() の両方をカバーする
    */
-  findLabelReferences(labelName: string): FileReference[] {
+  findLabelReferences(
+    labelName: string,
+    options?: { definitionFile?: string }
+  ): FileReference[] {
     if (!this.initialized) return [];
+
+    if (labelName === "start" && options?.definitionFile) {
+      return this.findStartLabelReferencesForFile(options.definitionFile);
+    }
 
     const results: FileReference[] = [];
     const escaped = this.escapeRegExp(labelName);
@@ -666,6 +695,7 @@ export class WorkspaceScanner {
         }
       }
     }
+
     return results;
   }
 
@@ -1075,5 +1105,150 @@ export class WorkspaceScanner {
   private isCommentLineByType(fileType: "ks" | "js", line: string): boolean {
     const trimmed = line.trimStart();
     return fileType === "js" ? trimmed.startsWith("//") : trimmed.startsWith(";");
+  }
+
+  private findStartLabelReferencesForFile(definitionFile: string): FileReference[] {
+    const results: FileReference[] = [];
+    const targetScenarioFile = this.normalizeScenarioFilePath(definitionFile);
+    if (!targetScenarioFile) return results;
+
+    const scenarioJumpTags = new Set(["jump", "call", "link", "glink", "clickable", "button"]);
+    const startTargetValues = new Set(["start", "*start"]);
+
+    for (const relativePath of this.getSearchableFiles()) {
+      const content = this.getIndexedFileContent(relativePath);
+      if (content === null) continue;
+      const lines = content.split("\n");
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (this.isCommentLine(relativePath, line)) continue;
+
+        if (relativePath.endsWith(".ks")) {
+          const sourceScenarioFile = this.normalizeScenarioFilePath(relativePath);
+          const collectStartRef = (tagNameRaw: string, attrs: string, attrOffset: number): void => {
+            const tagName = tagNameRaw.toLowerCase();
+            if (!scenarioJumpTags.has(tagName)) return;
+            const params = this.parseTagParams(attrs);
+            const storage = params.find((p) => p.name === "storage");
+            const target = params.find((p) => p.name === "target");
+
+            const normalizedStorage =
+              storage &&
+              storage.value.length > 0 &&
+              !storage.value.startsWith("[") &&
+              !storage.value.startsWith("%") &&
+              !storage.value.startsWith("&")
+                ? this.normalizeScenarioFilePath(storage.value)
+                : null;
+
+            const isExplicitStartTarget = target && startTargetValues.has(target.value.toLowerCase());
+            if (isExplicitStartTarget) {
+              const resolvesToTargetFile = normalizedStorage
+                ? normalizedStorage === targetScenarioFile
+                : sourceScenarioFile === targetScenarioFile;
+              if (resolvesToTargetFile) {
+                results.push({
+                  file: relativePath,
+                  line: i,
+                  startChar: attrOffset + target.valueStart,
+                  endChar: attrOffset + target.valueEnd,
+                });
+              }
+              return;
+            }
+
+            const isImplicitFileJumpToStart =
+              storage &&
+              normalizedStorage === targetScenarioFile &&
+              (!target || target.value.trim().length === 0);
+            if (isImplicitFileJumpToStart) {
+              results.push({
+                file: relativePath,
+                line: i,
+                startChar: attrOffset + storage.valueStart,
+                endChar: attrOffset + storage.valueEnd,
+              });
+            }
+          };
+
+          const bracketTagRegex = /\[(\w+)\b([^\]]*)\]/g;
+          let bracketMatch;
+          while ((bracketMatch = bracketTagRegex.exec(line)) !== null) {
+            const attrs = bracketMatch[2];
+            const attrOffset = bracketMatch.index + 1 + bracketMatch[1].length;
+            collectStartRef(bracketMatch[1], attrs, attrOffset);
+          }
+
+          const atTagMatch = line.match(/^\s*@(\w+)\b(.*)$/);
+          if (atTagMatch) {
+            const tagName = atTagMatch[1];
+            const attrs = atTagMatch[2] ?? "";
+            const attrOffset = line.indexOf(tagName) + tagName.length;
+            if (attrOffset >= tagName.length) {
+              collectStartRef(tagName, attrs, attrOffset);
+            }
+          }
+        }
+
+        if (relativePath.endsWith(".js")) {
+          const jsLabelRegex = /nextOrderWithLabel\s*\(\s*["'](\*?start)["'](?:\s*,\s*["']([^"']+)["'])?/gi;
+          let match;
+          while ((match = jsLabelRegex.exec(line)) !== null) {
+            const rawLabel = match[1];
+            const scenarioArg = match[2];
+            const normalizedStorage = scenarioArg ? this.normalizeScenarioFilePath(scenarioArg) : null;
+            if (normalizedStorage !== targetScenarioFile) continue;
+            const labelOffset = match[0].indexOf(rawLabel);
+            if (labelOffset < 0) continue;
+            const startChar = match.index + labelOffset;
+            results.push({
+              file: relativePath,
+              line: i,
+              startChar,
+              endChar: startChar + rawLabel.length,
+            });
+          }
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private parseTagParams(attrs: string): ParsedTagParam[] {
+    const results: ParsedTagParam[] = [];
+    const paramRegex = /\b(\w+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s\]]+))/g;
+    let match;
+    while ((match = paramRegex.exec(attrs)) !== null) {
+      const name = match[1].toLowerCase();
+      const rawToken = match[2];
+      let value = rawToken;
+      let valueStart = match.index + match[0].length - rawToken.length;
+      if (
+        (rawToken.startsWith("\"") && rawToken.endsWith("\"")) ||
+        (rawToken.startsWith("'") && rawToken.endsWith("'"))
+      ) {
+        value = rawToken.slice(1, -1);
+        valueStart += 1;
+      }
+      results.push({
+        name,
+        value,
+        valueStart,
+        valueEnd: valueStart + value.length,
+      });
+    }
+    return results;
+  }
+
+  private normalizeScenarioFilePath(value: string): string | null {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return null;
+    let normalized = trimmed.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (normalized.startsWith("scenario/")) {
+      normalized = normalized.substring("scenario/".length);
+    }
+    return normalized.endsWith(".ks") ? normalized : `${normalized}.ks`;
   }
 }
