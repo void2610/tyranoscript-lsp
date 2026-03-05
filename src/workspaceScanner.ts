@@ -766,7 +766,8 @@ export class WorkspaceScanner {
 
   /**
    * 全 .ks ファイルからキャラクター参照箇所を検索する
-   * chara_new 以外の chara_* タグで name="charaName" にマッチする行を返す
+   * chara_new 以外の chara_* タグで name="charaName"、
+   * および #charaName（[chara_ptext] 省略記法）にマッチする行を返す
    */
   findCharaReferences(charaName: string): FileReference[] {
     if (!this.initialized) return [];
@@ -777,6 +778,8 @@ export class WorkspaceScanner {
     const charaTagRegex = /\[chara_(?!new\b)\w+/;
     // name="charaName" または name=charaName にマッチしキャラ名をキャプチャ
     const nameRegex = new RegExp(`\\bname\\s*=\\s*"?(${escaped})"?`, "g");
+    // #charaName（行頭、前後空白許容）
+    const speakerRegex = new RegExp(`^\\s*#(${escaped})(?=\\s|$)`);
 
     for (const relativePath of this.getSearchableFiles([".ks"])) {
       const content = this.getIndexedFileContent(relativePath);
@@ -786,12 +789,25 @@ export class WorkspaceScanner {
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (this.isCommentLine(relativePath, line)) continue;
-        if (!charaTagRegex.test(line)) continue;
+        const hasCharaTag = charaTagRegex.test(line);
 
-        nameRegex.lastIndex = 0;
-        let match;
-        while ((match = nameRegex.exec(line)) !== null) {
-          const nameStart = match.index + match[0].length - match[1].length;
+        if (hasCharaTag) {
+          nameRegex.lastIndex = 0;
+          let match;
+          while ((match = nameRegex.exec(line)) !== null) {
+            const nameStart = match.index + match[0].length - match[1].length;
+            results.push({
+              file: relativePath,
+              line: i,
+              startChar: nameStart,
+              endChar: nameStart + charaName.length,
+            });
+          }
+        }
+
+        const speakerMatch = line.match(speakerRegex);
+        if (speakerMatch) {
+          const nameStart = speakerMatch.index! + speakerMatch[0].length - speakerMatch[1].length;
           results.push({
             file: relativePath,
             line: i,
